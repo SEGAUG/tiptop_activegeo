@@ -60,6 +60,40 @@ def ur5_workspace() -> tuple[Cuboid, ...]:
     return obstacles
 
 
+def piper_workspace() -> tuple[Cuboid, ...]:
+    desk = Cuboid(
+        "desk",
+        dims=[1.20, 0.90, 0.04],
+        pose=[0.35, 0.00, -0.04, *unit_quat],
+        color=[235, 235, 235],
+    )
+    rear_glass = Cuboid(
+        "rear_glass",
+        dims=[1.20, 0.04, 0.55],
+        pose=[0.45, 0.46, 0.28, *unit_quat],
+        color=[120, 200, 255],
+    )
+    right_arm_keepout = Cuboid(
+        "right_arm_keepout",
+        dims=[0.45, 0.35, 0.55],
+        pose=[0.20, -0.42, 0.25, *unit_quat],
+        color=[255, 80, 80],
+    )
+    laptop_keepout = Cuboid(
+        "laptop_keepout",
+        dims=[0.42, 0.30, 0.08],
+        pose=[0.45, -0.35, 0.04, *unit_quat],
+        color=[40, 40, 40],
+    )
+    ceiling = Cuboid(
+        "ceiling",
+        dims=[1.30, 1.10, 0.03],
+        pose=[0.35, 0.00, 0.75, *unit_quat],
+        color=[255, 255, 255],
+    )
+    return (desk, rear_glass, right_arm_keepout, laptop_keepout, ceiling)
+
+
 @cache
 def workspace_cuboids() -> tuple[Cuboid, ...]:
     """Return workspace cuboids for the configured robot, with names prefixed by 'workspace_' to avoid collisions with objects discovered by actual perception."""
@@ -74,6 +108,8 @@ def workspace_cuboids() -> tuple[Cuboid, ...]:
         cuboids = fr3_workspace()
     elif cfg.robot.type == "ur5":
         cuboids = ur5_workspace()
+    elif cfg.robot.type == "piper":
+        cuboids = piper_workspace()
     else:
         raise ValueError(f"Unknown robot type: {cfg.robot.type}")
     return tuple(replace(c, name=f"workspace_{c.name}") for c in cuboids)
