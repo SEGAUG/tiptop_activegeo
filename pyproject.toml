@@ -73,6 +73,8 @@ paint-gripper-mask = "tiptop.scripts.paint_gripper_mask:paint_gripper_mask_entry
 
 # Robot observations
 get-joint-positions = "tiptop.scripts.get_observation:get_joint_positions"
+piper-asset-debug = "tiptop.scripts.piper_asset_debug:entrypoint"
+piper-wrist-micro-calibration = "tiptop.scripts.piper_wrist_micro_calibration:entrypoint"
 piper-native-execution-dry-run = "tiptop.scripts.piper_native_execution_dry_run:entrypoint"
 piper-planning-dry-run = "tiptop.scripts.piper_planning_dry_run:entrypoint"
 
