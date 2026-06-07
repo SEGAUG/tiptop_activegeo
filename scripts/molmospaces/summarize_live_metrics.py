@@ -38,6 +38,12 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "depth_available": sum(1 for row in rows if row.get("depth_available")),
         "xyz_map_created": sum(1 for row in rows if row.get("xyz_map_created")),
         "depth_backends": sorted({str(row.get("depth_backend")) for row in rows if row.get("depth_backend") is not None}),
+        "qwen_attempted": sum(1 for row in rows if row.get("qwen_attempted")),
+        "qwen_success": sum(1 for row in rows if row.get("qwen_success")),
+        "sam_attempted": sum(1 for row in rows if row.get("sam_attempted")),
+        "sam_success": sum(1 for row in rows if row.get("sam_success")),
+        "object_cloud_created": sum(1 for row in rows if row.get("object_cloud_created")),
+        "max_target_object_points": max([int(row.get("target_object_points") or 0) for row in rows], default=0),
         "latest": latest,
     }
 

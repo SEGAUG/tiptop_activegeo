@@ -239,13 +239,56 @@ def test_live_policy_uses_depth_to_create_xyz_and_next_blocker(tmp_path, monkeyp
     assert (live_dir / "xyz_exo_camera_1.npy").exists()
 
     failure = json.loads((live_dir / "planning_failure.json").read_text())
-    assert failure["failure_reason"] == "qwen_detection_not_yet_integrated"
+    assert failure["failure_reason"] == "qwen_detection_failed"
     assert failure["debug"]["failure_layer"] == "qwen"
     assert failure["debug"]["depth_available"] is True
     assert failure["debug"]["xyz_map_created"] is True
 
     metrics_path = Path(tmp_path) / "molmospaces_live" / "episode_metrics.jsonl"
     metrics = [json.loads(line) for line in metrics_path.read_text().splitlines()]
-    assert metrics[-1]["fallback_reason"] == "qwen_detection_not_yet_integrated"
+    assert metrics[-1]["fallback_reason"] == "qwen_detection_failed"
     assert metrics[-1]["depth_available"] is True
     assert metrics[-1]["xyz_map_created"] is True
+    assert metrics[-1]["qwen_attempted"] is True
+
+
+def test_normalize_qwen_boxes_from_normalized_xyxy():
+    from tiptop_molmospaces.live_perception import normalize_qwen_boxes
+
+    qwen_result = {
+        "parsed": {
+            "bboxes": [
+                {"box_2d": [100, 200, 500, 800], "label": "silver kettle"},
+                {"box_2d": [900, 900, 800, 950], "label": "bad"},
+            ]
+        }
+    }
+    detections = normalize_qwen_boxes(qwen_result, (352, 624, 3))
+
+    assert len(detections) == 1
+    assert detections[0]["label"] == "silver_kettle"
+    np.testing.assert_allclose(detections[0]["bbox_xyxy"], [62.4, 70.4, 312.0, 281.6])
+    assert detections[0]["box_2d_yxyx_norm1000"] == [200, 100, 800, 500]
+
+
+def test_build_object_clouds_from_mask_and_xyz(tmp_path):
+    from tiptop_molmospaces.live_perception import build_object_clouds
+
+    xyz = np.zeros((3, 4, 3), dtype=np.float32)
+    xyz[1, 1] = [1.0, 2.0, 3.0]
+    xyz[1, 2] = [2.0, 2.0, 4.0]
+    xyz[2, 2] = [np.nan, np.nan, np.nan]
+    mask = np.zeros((3, 4), dtype=bool)
+    mask[1, 1] = True
+    mask[1, 2] = True
+    mask[2, 2] = True
+    detections = [{"label": "target", "bbox_xyxy": [1, 1, 2, 2]}]
+
+    result = build_object_clouds(xyz, [mask], detections, tmp_path)
+
+    assert result["object_cloud_created"] is True
+    assert result["target_object_points"] == 2
+    summary = json.loads((tmp_path / "object_geometry_summary.json").read_text())
+    assert summary["objects"][0]["valid_xyz_count"] == 2
+    np.testing.assert_allclose(summary["objects"][0]["centroid"], [1.5, 2.0, 3.5])
+    assert (tmp_path / "object_clouds" / "00_target.npy").exists()

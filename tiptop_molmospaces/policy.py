@@ -255,23 +255,50 @@ class TiPToPPolicy(InferencePolicy):
             self._write_planning_result(result)
             return result
 
+        perception_observation = dict(obs) if isinstance(obs, dict) else {"observation": obs}
+        perception_observation["_tiptop_xyz_maps"] = xyz_maps
+        perception_observation["task_text"] = task_text
+        from tiptop_molmospaces.live_perception import run_live_perception
+
+        perception_result = run_live_perception(perception_observation, self._episode_dir)
+        perception_debug = self._perception_debug_summary(perception_result)
+        if not perception_result.get("success", False):
+            stage = str(perception_result.get("stage", "qwen"))
+            reason_by_stage = {
+                "qwen": "qwen_detection_failed",
+                "sam": "sam_mask_failed",
+                "object_cloud": "object_cloud_empty",
+                "exception": "live_perception_failed",
+            }
+            result = {
+                "success": False,
+                "joint_trajectory": None,
+                "gripper_trajectory": None,
+                "failure_reason": reason_by_stage.get(stage, "live_perception_failed"),
+                "debug": {
+                    "failure_layer": stage,
+                    "depth_available": True,
+                    "xyz_map_created": True,
+                    **perception_debug,
+                },
+            }
+            self._write_planning_result(result)
+            return result
+
         result = {
             "success": False,
             "joint_trajectory": None,
             "gripper_trajectory": None,
-            "failure_reason": "qwen_detection_not_yet_integrated",
+            "failure_reason": "m2t2_cutamp_not_yet_integrated",
             "debug": {
-                "failure_layer": "qwen",
+                "failure_layer": "m2t2_cutamp",
                 "depth_available": True,
                 "xyz_map_created": True,
                 "depth_keys": sorted(depth_maps.keys()),
                 "intrinsics_keys": sorted(intrinsics.keys()),
                 "xyz_keys": sorted(xyz_maps.keys()),
-                "note": (
-                    "Observation has non-privileged rendered camera depth and xyz maps. "
-                    "The next integration step is wiring Qwen detections and masks into "
-                    "the existing TiPToP SAM/M2T2/cuTAMP path."
-                ),
+                **perception_debug,
+                "note": "Qwen, SAM, and object cloud succeeded; M2T2/cuTAMP planning is the next integration layer.",
             },
         }
         self._write_planning_result(result)
@@ -490,6 +517,28 @@ class TiPToPPolicy(InferencePolicy):
             encoding="utf-8",
         )
 
+    def _perception_debug_summary(self, perception_result: dict[str, Any]) -> dict[str, Any]:
+        detections = perception_result.get("detections") or []
+        masks = perception_result.get("masks") or []
+        object_clouds = perception_result.get("object_clouds") or {}
+        debug = perception_result.get("debug") or {}
+        qwen_debug = debug.get("qwen") if isinstance(debug, dict) else {}
+        sam_debug = debug.get("sam") if isinstance(debug, dict) else {}
+        return {
+            "perception_stage": perception_result.get("stage"),
+            "perception_reason": perception_result.get("reason"),
+            "task_text": perception_result.get("task_text"),
+            "primary_camera": perception_result.get("primary_camera"),
+            "qwen_attempted": bool(qwen_debug),
+            "qwen_success": bool(qwen_debug.get("success") and detections) if isinstance(qwen_debug, dict) else bool(detections),
+            "qwen_num_detections": int(len(detections)),
+            "sam_attempted": bool(sam_debug),
+            "sam_success": bool(sam_debug.get("success") and masks) if isinstance(sam_debug, dict) else bool(masks),
+            "sam_num_masks": int(len(masks)),
+            "object_cloud_created": bool(object_clouds.get("object_cloud_created", False)) if isinstance(object_clouds, dict) else False,
+            "target_object_points": int(object_clouds.get("target_object_points", 0)) if isinstance(object_clouds, dict) else 0,
+        }
+
     def _log_observation(self, observation: Any) -> None:
         obs = self._first_observation(observation)
         if self._observation_logged:
@@ -571,6 +620,16 @@ class TiPToPPolicy(InferencePolicy):
             "depth_backend": self.depth_backend,
             "depth_available": bool(plan_result.get("debug", {}).get("depth_available", bool(self._extract_depth_maps(observation)))),
             "xyz_map_created": bool(plan_result.get("debug", {}).get("xyz_map_created", False)),
+            "qwen_attempted": bool(plan_result.get("debug", {}).get("qwen_attempted", False)),
+            "qwen_success": bool(plan_result.get("debug", {}).get("qwen_success", False)),
+            "qwen_num_detections": int(plan_result.get("debug", {}).get("qwen_num_detections", 0)),
+            "sam_attempted": bool(plan_result.get("debug", {}).get("sam_attempted", False)),
+            "sam_success": bool(plan_result.get("debug", {}).get("sam_success", False)),
+            "sam_num_masks": int(plan_result.get("debug", {}).get("sam_num_masks", 0)),
+            "object_cloud_created": bool(plan_result.get("debug", {}).get("object_cloud_created", False)),
+            "target_object_points": int(plan_result.get("debug", {}).get("target_object_points", 0)),
+            "primary_camera": plan_result.get("debug", {}).get("primary_camera"),
+            "task_text": plan_result.get("debug", {}).get("task_text"),
         }
         with (self.live_log_dir / "episode_metrics.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(metric, sort_keys=True) + "\n")
