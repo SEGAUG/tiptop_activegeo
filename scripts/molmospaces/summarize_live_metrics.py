@@ -20,6 +20,7 @@ def load_metrics(path: Path) -> list[dict[str, Any]]:
 
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     fallback_reasons = Counter(str(row.get("fallback_reason")) for row in rows if row.get("fallback_used"))
+    latest = rows[-1] if rows else {}
     return {
         "episodes": len(rows),
         "planning_attempted": sum(1 for row in rows if row.get("planning_attempted")),
@@ -34,6 +35,10 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "backends": sorted({str(row.get("backend")) for row in rows if row.get("backend") is not None}),
         "live_planning_enabled": any(bool(row.get("live_planning_enabled")) for row in rows),
         "require_plan": any(bool(row.get("require_plan")) for row in rows),
+        "depth_available": sum(1 for row in rows if row.get("depth_available")),
+        "xyz_map_created": sum(1 for row in rows if row.get("xyz_map_created")),
+        "depth_backends": sorted({str(row.get("depth_backend")) for row in rows if row.get("depth_backend") is not None}),
+        "latest": latest,
     }
 
 

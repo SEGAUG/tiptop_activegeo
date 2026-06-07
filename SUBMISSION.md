@@ -99,10 +99,16 @@ Latest live smoke result on `pick_v15 --idx 0`: live planning was attempted once
 depth was not available in the policy observation, `planning_success=0`,
 `fallback_reason=no_depth_available`, and no non-hold action was produced.
 
+Latest rendered-depth smoke result with `TIPTOP_ENABLE_RENDERED_DEPTH=1` and
+`TiPToPDepthEvalConfig`: MolmoSpaces exposed `exo_camera_1_depth` and
+`wrist_camera_depth`; TiPToP saved depth `.npy` files, created xyz maps for both
+cameras, and moved the blocker to `qwen_detection_not_yet_integrated`.
+
 ## Known Limitations
 
 - The adapter uses MolmoSpaces Franka joint-position commands and never emits real Piper control commands.
 - Live TiPToP perception and TAMP planning are enabled only when `TIPTOP_ENABLE_LIVE_PLANNING=1`.
+- Rendered camera depth is disabled by default and enabled only with `TIPTOP_ENABLE_RENDERED_DEPTH=1` or `TiPToPDepthEvalConfig`; maintainer confirmation is needed before using it for final leaderboard scoring.
 - The modified TiPToP perception stack uses the Qwen/Tongyi Qianwen API path when live perception is enabled; set the API key through the environment rather than storing it in code.
 - If no executable TiPToP plan is available, the policy logs the failure and returns a hold-current joint-position action with a safe gripper command.
 - A serialized TiPToP plan can be replayed through `policy_config.serialized_plan_path`; trajectory steps are split into per-step MolmoSpaces actions by `tiptop_molmospaces.action_queue.ActionQueue`.

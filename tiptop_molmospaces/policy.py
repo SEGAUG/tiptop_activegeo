@@ -48,6 +48,14 @@ class TiPToPPolicy(InferencePolicy):
             bool(getattr(self.policy_config, "enable_tiptop_planning", False)),
         )
         self.require_plan = _env_enabled("TIPTOP_REQUIRE_PLAN", False)
+        self.rendered_depth_enabled = _env_enabled(
+            "TIPTOP_ENABLE_RENDERED_DEPTH",
+            bool(getattr(self.policy_config, "enable_rendered_depth", False)),
+        )
+        self.depth_backend = os.environ.get(
+            "TIPTOP_DEPTH_BACKEND",
+            str(getattr(self.policy_config, "depth_backend", "rendered" if self.rendered_depth_enabled else "none")),
+        )
         self.backend = os.environ.get("TIPTOP_VLM_BACKEND", "qwen" if self.live_planning_enabled else "disabled")
         self.live_log_dir = self.log_dir / "molmospaces_live"
         self._episode_counter = -1
@@ -171,6 +179,10 @@ class TiPToPPolicy(InferencePolicy):
             self._save_rgb_debug(name, image)
         for name, depth in depth_maps.items():
             np.save(self._episode_dir / f"depth_{self._safe_name(name)}.npy", np.asarray(depth))
+        xyz_maps, xyz_debug = self._build_xyz_maps(depth_maps, intrinsics)
+        for name, xyz_map in xyz_maps.items():
+            np.save(self._episode_dir / f"xyz_{self._safe_name(name)}.npy", xyz_map)
+        self._write_depth_summary(depth_maps, intrinsics, xyz_maps, xyz_debug)
 
         summary = {
             **self._observation_summary(obs),
@@ -182,6 +194,10 @@ class TiPToPPolicy(InferencePolicy):
             "live_planning_enabled": self.live_planning_enabled,
             "require_plan": self.require_plan,
             "backend": self.backend,
+            "depth_backend": self.depth_backend,
+            "rendered_depth_enabled": self.rendered_depth_enabled,
+            "depth_available": bool(depth_maps),
+            "xyz_map_created": bool(xyz_maps),
         }
         (self._episode_dir / "observation_summary.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True),
@@ -221,18 +237,40 @@ class TiPToPPolicy(InferencePolicy):
             self._write_planning_result(result)
             return result
 
+        if not xyz_maps:
+            result = {
+                "success": False,
+                "joint_trajectory": None,
+                "gripper_trajectory": None,
+                "failure_reason": "xyz_map_creation_failed",
+                "debug": {
+                    "failure_layer": "depth",
+                    "depth_available": bool(depth_maps),
+                    "xyz_map_created": False,
+                    "depth_keys": sorted(depth_maps.keys()),
+                    "intrinsics_keys": sorted(intrinsics.keys()),
+                    "xyz_debug": xyz_debug,
+                },
+            }
+            self._write_planning_result(result)
+            return result
+
         result = {
             "success": False,
             "joint_trajectory": None,
             "gripper_trajectory": None,
-            "failure_reason": "live_tiptop_pipeline_requires_m2t2_cutamp_integration",
+            "failure_reason": "qwen_detection_not_yet_integrated",
             "debug": {
-                "failure_layer": "cuTAMP",
+                "failure_layer": "qwen",
+                "depth_available": True,
+                "xyz_map_created": True,
                 "depth_keys": sorted(depth_maps.keys()),
                 "intrinsics_keys": sorted(intrinsics.keys()),
+                "xyz_keys": sorted(xyz_maps.keys()),
                 "note": (
-                    "Observation has depth/intrinsics, but the MolmoSpaces adapter still needs a "
-                    "non-privileged TiPToP scene construction path for M2T2 and cuTAMP."
+                    "Observation has non-privileged rendered camera depth and xyz maps. "
+                    "The next integration step is wiring Qwen detections and masks into "
+                    "the existing TiPToP SAM/M2T2/cuTAMP path."
                 ),
             },
         }
@@ -363,6 +401,95 @@ class TiPToPPolicy(InferencePolicy):
                 intrinsics[camera_name] = np.asarray(matrix, dtype=np.float32)
         return intrinsics
 
+    def _camera_name_from_depth_key(self, depth_key: str) -> str:
+        key = str(depth_key)
+        for suffix in ("_depth", "/depth"):
+            if key.endswith(suffix):
+                return key[: -len(suffix)]
+        if key.startswith("depth_"):
+            return key.removeprefix("depth_")
+        return key
+
+    def _build_xyz_maps(
+        self,
+        depth_maps: dict[str, np.ndarray],
+        intrinsics: dict[str, np.ndarray],
+    ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+        if not depth_maps or not intrinsics:
+            return {}, {}
+        from tiptop.perception.utils import depth_to_xyz
+
+        xyz_maps: dict[str, np.ndarray] = {}
+        debug: dict[str, Any] = {}
+        for depth_key, depth in depth_maps.items():
+            camera_name = self._camera_name_from_depth_key(depth_key)
+            K = intrinsics.get(camera_name)
+            if K is None:
+                debug[depth_key] = {
+                    "camera_name": camera_name,
+                    "status": "missing_intrinsics",
+                    "available_intrinsics": sorted(intrinsics.keys()),
+                }
+                continue
+            depth_array = np.asarray(depth, dtype=np.float32)
+            if depth_array.ndim != 2:
+                debug[depth_key] = {"camera_name": camera_name, "status": "bad_depth_shape", "shape": list(depth_array.shape)}
+                continue
+            finite = np.isfinite(depth_array)
+            finite &= depth_array > 0
+            if not finite.any():
+                debug[depth_key] = {"camera_name": camera_name, "status": "no_positive_finite_depth"}
+                continue
+            xyz = depth_to_xyz(depth_array, np.asarray(K, dtype=np.float32))
+            xyz[~finite] = np.nan
+            xyz_maps[camera_name] = xyz.astype(np.float32, copy=False)
+            debug[depth_key] = {
+                "camera_name": camera_name,
+                "status": "ok",
+                "depth_shape": list(depth_array.shape),
+                "xyz_shape": list(xyz.shape),
+                "valid_depth_pixels": int(finite.sum()),
+            }
+        return xyz_maps, debug
+
+    def _write_depth_summary(
+        self,
+        depth_maps: dict[str, np.ndarray],
+        intrinsics: dict[str, np.ndarray],
+        xyz_maps: dict[str, np.ndarray],
+        xyz_debug: dict[str, Any],
+    ) -> None:
+        self._episode_dir.mkdir(parents=True, exist_ok=True)
+        depths: dict[str, Any] = {}
+        for key, depth in depth_maps.items():
+            array = np.asarray(depth, dtype=np.float32)
+            finite = np.isfinite(array)
+            finite &= array > 0
+            depths[key] = {
+                "shape": list(array.shape),
+                "dtype": str(array.dtype),
+                "positive_finite_count": int(finite.sum()),
+                "min": float(array[finite].min()) if finite.any() else None,
+                "max": float(array[finite].max()) if finite.any() else None,
+                "mean": float(array[finite].mean()) if finite.any() else None,
+            }
+        payload = {
+            "depth_available": bool(depth_maps),
+            "xyz_map_created": bool(xyz_maps),
+            "depth_backend": self.depth_backend,
+            "rendered_depth_enabled": self.rendered_depth_enabled,
+            "depth_keys": sorted(depth_maps.keys()),
+            "intrinsics_keys": sorted(intrinsics.keys()),
+            "xyz_keys": sorted(xyz_maps.keys()),
+            "depths": depths,
+            "xyz_debug": xyz_debug,
+            "note": "Depth comes from MolmoSpaces camera DepthSensor/render_depth_frame when enabled; privileged object poses are not used.",
+        }
+        (self._episode_dir / "depth_summary.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
     def _log_observation(self, observation: Any) -> None:
         obs = self._first_observation(observation)
         if self._observation_logged:
@@ -441,6 +568,9 @@ class TiPToPPolicy(InferencePolicy):
             "backend": self.backend,
             "m2t2_enabled": bool(plan_result.get("debug", {}).get("m2t2_enabled", False)),
             "cutamp_enabled": bool(plan_result.get("debug", {}).get("cutamp_enabled", False)),
+            "depth_backend": self.depth_backend,
+            "depth_available": bool(plan_result.get("debug", {}).get("depth_available", bool(self._extract_depth_maps(observation)))),
+            "xyz_map_created": bool(plan_result.get("debug", {}).get("xyz_map_created", False)),
         }
         with (self.live_log_dir / "episode_metrics.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(metric, sort_keys=True) + "\n")
@@ -527,6 +657,8 @@ class TiPToPPolicy(InferencePolicy):
             else:
                 yield "image", container
         for key, value in observation.items():
+            if isinstance(key, str) and "depth" in key.lower():
+                continue
             if isinstance(key, str) and ("camera" in key or key in self.camera_names):
                 if hasattr(value, "shape"):
                     yield key, value

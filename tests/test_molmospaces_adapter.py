@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -163,3 +164,88 @@ def test_live_policy_queues_successful_joint_trajectory(tmp_path, monkeypatch):
     assert metrics[-1]["fallback_used"] is False
     assert metrics[-1]["action_queue_length"] == 2
     assert metrics[-1]["first_non_hold_action_step"] == 1
+
+
+def test_depth_eval_config_enables_recorded_camera_depth(monkeypatch):
+    from molmo_spaces.tasks.json_eval_task_sampler import JsonEvalTaskSampler
+    from tiptop_molmospaces.configs import TiPToPDepthEvalConfig
+
+    monkeypatch.setenv("TIPTOP_ENABLE_RENDERED_DEPTH", "1")
+    _config = TiPToPDepthEvalConfig()
+
+    episode_spec = SimpleNamespace(
+        img_resolution=(5, 4),
+        cameras=[
+            {
+                "name": "wrist_camera",
+                "type": "robot_mounted",
+                "reference_body_names": ["robot_0/gripper/base"],
+                "camera_offset": [0.0, 0.0, 0.0],
+                "lookat_offset": [0.0, 0.0, 1.0],
+                "camera_quaternion": [1.0, 0.0, 0.0, 0.0],
+                "fov": 56.74,
+                "record_depth": False,
+            },
+            {
+                "name": "exo_camera_1",
+                "type": "exocentric",
+                "pos": [0.0, 0.0, 1.0],
+                "up": [0.0, 0.0, 1.0],
+                "forward": [1.0, 0.0, 0.0],
+                "fov": 71.0,
+                "record_depth": False,
+            },
+        ],
+    )
+    sampler = JsonEvalTaskSampler.__new__(JsonEvalTaskSampler)
+    camera_config = sampler._build_camera_config_from_spec(episode_spec)
+
+    assert {camera.name: camera.record_depth for camera in camera_config.cameras} == {
+        "wrist_camera": True,
+        "exo_camera_1": True,
+    }
+
+
+def test_live_policy_uses_depth_to_create_xyz_and_next_blocker(tmp_path, monkeypatch):
+    from tiptop_molmospaces.configs import TiPToPEvalConfig
+    from tiptop_molmospaces.policy import TiPToPPolicy
+
+    monkeypatch.setenv("TIPTOP_ENABLE_LIVE_PLANNING", "1")
+    monkeypatch.setenv("TIPTOP_ENABLE_RENDERED_DEPTH", "1")
+    monkeypatch.setenv("TIPTOP_VLM_BACKEND", "qwen")
+
+    config = TiPToPEvalConfig()
+    config.policy_config.log_dir = str(tmp_path)
+    policy = TiPToPPolicy(config, task=None)
+    policy.reset()
+
+    K = np.array([[2.0, 0.0, 1.0], [0.0, 2.0, 1.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+    observation = {
+        "exo_camera_1": np.zeros((2, 3, 3), dtype=np.uint8),
+        "exo_camera_1_depth": np.ones((2, 3), dtype=np.float32),
+        "sensor_param_exo_camera_1": {"intrinsic_cv": K},
+        "qpos": {"arm": np.zeros(7, dtype=np.float32), "gripper": [255.0]},
+        "task": "pick up the mug",
+    }
+    action = policy.get_action(observation)
+
+    np.testing.assert_allclose(action["arm"], np.zeros(7, dtype=np.float32))
+    live_dir = Path(tmp_path) / "molmospaces_live" / "episode_000000"
+    depth_summary = json.loads((live_dir / "depth_summary.json").read_text())
+    assert depth_summary["depth_available"] is True
+    assert depth_summary["xyz_map_created"] is True
+    assert depth_summary["xyz_keys"] == ["exo_camera_1"]
+    assert (live_dir / "depth_exo_camera_1_depth.npy").exists()
+    assert (live_dir / "xyz_exo_camera_1.npy").exists()
+
+    failure = json.loads((live_dir / "planning_failure.json").read_text())
+    assert failure["failure_reason"] == "qwen_detection_not_yet_integrated"
+    assert failure["debug"]["failure_layer"] == "qwen"
+    assert failure["debug"]["depth_available"] is True
+    assert failure["debug"]["xyz_map_created"] is True
+
+    metrics_path = Path(tmp_path) / "molmospaces_live" / "episode_metrics.jsonl"
+    metrics = [json.loads(line) for line in metrics_path.read_text().splitlines()]
+    assert metrics[-1]["fallback_reason"] == "qwen_detection_not_yet_integrated"
+    assert metrics[-1]["depth_available"] is True
+    assert metrics[-1]["xyz_map_created"] is True
