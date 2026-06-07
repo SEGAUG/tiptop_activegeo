@@ -149,6 +149,8 @@ def sam2_segment_objects(
     ])
 
     _log.info(f"Segmenting {len(boxes)} objects using SAM2 in {mode} mode")
+    if len(boxes) == 0:
+        return np.zeros((0, 1, img_height, img_width), dtype=bool)
     if mode == "local":
         masks, scores = _segment_local(rgb_pil, boxes, str(download_sam2_checkpoint()))
     else:

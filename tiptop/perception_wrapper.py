@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 
 import aiohttp
@@ -27,19 +28,37 @@ async def detect_and_segment(rgb: UInt8[np.ndarray, "h w 3"], task_instruction: 
     )
 
     async def _detect():
-        from tiptop.perception.gemini import detect_and_translate_async
+        backend = os.environ.get("TIPTOP_VLM_BACKEND", "gemini").lower()
 
-        _log.info(f"Starting Gemini object detection")
         _st = time.perf_counter()
-        _bboxes, _grounded_atoms = await detect_and_translate_async(rgb_pil_resized, task_instruction)
+        if backend == "qwen":
+            from tiptop.perception.qwen_vl import qwen_detect_and_translate
+
+            _log.info("Starting Qwen-VL object detection")
+            _bboxes, _grounded_atoms = await asyncio.to_thread(
+                qwen_detect_and_translate, rgb_pil_resized, task_instruction
+            )
+        elif backend == "gemini":
+            from tiptop.perception.gemini import detect_and_translate_async
+
+            _log.info("Starting Gemini object detection")
+            _bboxes, _grounded_atoms = await detect_and_translate_async(rgb_pil_resized, task_instruction)
+        else:
+            raise ValueError(f"Unsupported TIPTOP_VLM_BACKEND={backend!r}; expected 'gemini' or 'qwen'")
         _dur = time.perf_counter() - _st
-        _log.info(f"Gemini detection took {_dur:.2f}s ({len(_bboxes)} objects, {len(_grounded_atoms)} atoms)")
+        _log.info(
+            "%s detection took %.2fs (%d objects, %d atoms)",
+            backend,
+            _dur,
+            len(_bboxes),
+            len(_grounded_atoms),
+        )
         return _bboxes, _grounded_atoms
 
     def _segment(_bboxes: list[dict]):
         from tiptop.perception.sam2 import sam2_segment_objects
 
-        _log.info(f"Starting SAM2 object segmentation with Gemini masks")
+        _log.info("Starting SAM2 object segmentation with VLM boxes")
         _st = time.perf_counter()
         # TODO: async version of this?
         _masks = sam2_segment_objects(rgb_pil, _bboxes)
@@ -108,6 +127,7 @@ async def predict_depth_and_grasps(
         scene_xyz=xyz_downsampled,
         scene_rgb=rgb_downsampled,
         apply_bounds=cfg.perception.m2t2.apply_bounds,
+        request_timeout_s=float(cfg.perception.m2t2.get("request_timeout_s", 30.0)),
     )
 
     return {
