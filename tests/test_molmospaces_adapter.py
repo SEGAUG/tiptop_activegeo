@@ -78,3 +78,88 @@ def test_eval_config_points_to_policy_and_joint_position_action_type():
     assert config.policy_config.action_type == "joint_position"
     assert isinstance(config.robot_config, FrankaRobotConfig)
     assert config.policy_dt_ms == 200.0
+
+
+def test_live_policy_records_no_depth_blocker_and_metrics(tmp_path, monkeypatch):
+    from tiptop_molmospaces.configs import TiPToPEvalConfig
+    from tiptop_molmospaces.policy import TiPToPPolicy
+
+    monkeypatch.setenv("TIPTOP_ENABLE_LIVE_PLANNING", "1")
+    monkeypatch.setenv("TIPTOP_REQUIRE_PLAN", "1")
+
+    config = TiPToPEvalConfig()
+    config.policy_config.log_dir = str(tmp_path)
+    policy = TiPToPPolicy(config, task=None)
+    policy.reset()
+
+    observation = {
+        "exo_camera_1": np.zeros((4, 5, 3), dtype=np.uint8),
+        "wrist_camera": np.zeros((4, 5, 3), dtype=np.uint8),
+        "qpos": {"arm": np.arange(7, dtype=np.float32), "gripper": [0.5, 0.5]},
+        "task": "pick up the mug",
+    }
+    action = policy.get_action(observation)
+
+    np.testing.assert_allclose(action["arm"], np.arange(7, dtype=np.float32))
+    np.testing.assert_allclose(action["gripper"], np.array([0.5], dtype=np.float32))
+
+    live_dir = Path(tmp_path) / "molmospaces_live"
+    failure_path = live_dir / "episode_000000" / "planning_failure.json"
+    assert failure_path.exists()
+    failure = json.loads(failure_path.read_text())
+    assert failure["failure_reason"] == "no_depth_available"
+
+    metrics_path = live_dir / "episode_metrics.jsonl"
+    metrics = [json.loads(line) for line in metrics_path.read_text().splitlines()]
+    assert metrics[-1]["planning_attempted"] is True
+    assert metrics[-1]["planning_success"] is False
+    assert metrics[-1]["fallback_used"] is True
+    assert metrics[-1]["fallback_reason"] == "no_depth_available"
+    assert metrics[-1]["live_planning_enabled"] is True
+    assert metrics[-1]["require_plan"] is True
+    assert metrics[-1]["backend"] == "qwen"
+
+
+def test_live_policy_queues_successful_joint_trajectory(tmp_path, monkeypatch):
+    from tiptop_molmospaces.configs import TiPToPEvalConfig
+    from tiptop_molmospaces.policy import TiPToPPolicy
+
+    monkeypatch.setenv("TIPTOP_ENABLE_LIVE_PLANNING", "1")
+    monkeypatch.delenv("TIPTOP_REQUIRE_PLAN", raising=False)
+
+    config = TiPToPEvalConfig()
+    config.policy_config.log_dir = str(tmp_path)
+    policy = TiPToPPolicy(config, task=None)
+    policy.reset()
+
+    def fake_plan_from_observation(_observation):
+        return {
+            "success": True,
+            "joint_trajectory": np.array(
+                [
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+                ],
+                dtype=np.float32,
+            ),
+            "gripper_trajectory": np.array([[255.0], [0.0]], dtype=np.float32),
+            "debug": {"failure_layer": None},
+        }
+
+    policy.plan_from_observation = fake_plan_from_observation
+    observation = {"qpos": {"arm": np.zeros(7, dtype=np.float32), "gripper": [255.0]}, "task": "pick"}
+
+    first = policy.get_action(observation)
+    second = policy.get_action(observation)
+
+    np.testing.assert_allclose(first["arm"], np.zeros(7, dtype=np.float32))
+    np.testing.assert_allclose(first["gripper"], np.array([255.0], dtype=np.float32))
+    np.testing.assert_allclose(second["arm"], np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7], dtype=np.float32))
+    np.testing.assert_allclose(second["gripper"], np.array([0.0], dtype=np.float32))
+
+    metrics_path = Path(tmp_path) / "molmospaces_live" / "episode_metrics.jsonl"
+    metrics = [json.loads(line) for line in metrics_path.read_text().splitlines()]
+    assert metrics[-1]["planning_success"] is True
+    assert metrics[-1]["fallback_used"] is False
+    assert metrics[-1]["action_queue_length"] == 2
+    assert metrics[-1]["first_non_hold_action_step"] == 1

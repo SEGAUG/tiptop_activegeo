@@ -65,10 +65,44 @@ The script also creates:
 /data/data2/jinhui.lin/code/aicode/TiPToP-ActiveGeometry_molmospaces_results_<timestamp>.zip
 ```
 
+## Observation Interface
+
+The current MolmoSpaces smoke observation exposes two RGB cameras, `exo_camera_1`
+and `wrist_camera`, both observed as `uint8` images with shape `352x624x3`.
+The observation also exposes Franka arm qpos with shape `(7,)`, gripper/base
+state under `qpos`, task language through `task_info`, and camera calibration
+metadata through `sensor_param_exo_camera_1` and `sensor_param_wrist_camera`
+including `intrinsic_cv`.
+
+The policy observation does not currently expose depth images. Live planning
+therefore records `no_depth_available` under `logs/molmospaces_live/<episode>/`
+and does not use benchmark JSON object poses, target poses, or other privileged
+simulator state to construct a scene. Qwen/Tongyi Qianwen remains the configured
+VLM backend for live perception, but the current smoke path blocks before VLM,
+SAM/M2T2, and cuTAMP because non-privileged depth is unavailable.
+
+## Live Smoke
+
+```bash
+cd /data/data2/jinhui.lin/code/aicode/tiptop
+bash scripts/molmospaces/run_smoke_live.sh
+python scripts/molmospaces/summarize_live_metrics.py
+```
+
+`run_smoke_live.sh` sets `TIPTOP_ENABLE_LIVE_PLANNING=1`,
+`TIPTOP_REQUIRE_PLAN=1`, and `TIPTOP_VLM_BACKEND=qwen`. A planning failure still
+returns a hold-current joint-position action for evaluator compatibility, but
+the failure is written to `planning_failure.json` and
+`episode_metrics.jsonl`.
+
+Latest live smoke result on `pick_v15 --idx 0`: live planning was attempted once,
+depth was not available in the policy observation, `planning_success=0`,
+`fallback_reason=no_depth_available`, and no non-hold action was produced.
+
 ## Known Limitations
 
 - The adapter uses MolmoSpaces Franka joint-position commands and never emits real Piper control commands.
-- Live TiPToP perception and TAMP planning are not enabled by default because they require configured external perception/planning services and calibrated runtime paths.
+- Live TiPToP perception and TAMP planning are enabled only when `TIPTOP_ENABLE_LIVE_PLANNING=1`.
 - The modified TiPToP perception stack uses the Qwen/Tongyi Qianwen API path when live perception is enabled; set the API key through the environment rather than storing it in code.
 - If no executable TiPToP plan is available, the policy logs the failure and returns a hold-current joint-position action with a safe gripper command.
 - A serialized TiPToP plan can be replayed through `policy_config.serialized_plan_path`; trajectory steps are split into per-step MolmoSpaces actions by `tiptop_molmospaces.action_queue.ActionQueue`.
