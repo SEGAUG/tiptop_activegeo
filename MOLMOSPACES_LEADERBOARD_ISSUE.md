@@ -50,7 +50,7 @@ N/A
 
 Results zip:
 Attach or link:
-https://github.com/SEGAUG/tiptop_activegeo/releases/download/tiptop_activegeo_molmospaces_smoke_v1/TiPToP-ActiveGeometry_molmospaces_results_20260606_191953.zip
+https://github.com/SEGAUG/tiptop_activegeo/releases/download/tiptop_activegeo_qwen_molmospaces_v1/TiPToP-ActiveGeometry_molmospaces_results_20260606_191953.zip
 
 Current result scope:
 Smoke/inspection only. The zip contains `smoke_pick_v15.csv` and `inspect_observation_latest.csv`; it is not a full benchmark leaderboard score package.
@@ -60,8 +60,11 @@ Smoke/inspection only. The zip contains `smoke_pick_v15.csv` and `inspect_observ
 MolmoSpaces commit:
 b4ed488c4e8cfb9a4abff177a21787ddc22f922c
 
-TiPToP fork commit:
+TiPToP original fork base commit:
 e75c1c1dd0c73fcfc7828c0a65365af1243be2fb
+
+Uploaded Qwen/MolmoSpaces source commit:
+53aa4f462adb17ce5cf7188b092698242b9497f0
 
 Run command:
 See `scripts/molmospaces/run_selected_benchmarks.sh`

@@ -7,7 +7,8 @@
 - MolmoBot or in-domain data used: No
 - source repo: modified TiPToP repository in this workspace
 - MolmoSpaces commit: b4ed488c4e8cfb9a4abff177a21787ddc22f922c
-- TiPToP commit: e75c1c1dd0c73fcfc7828c0a65365af1243be2fb
+- TiPToP original fork base commit: e75c1c1dd0c73fcfc7828c0a65365af1243be2fb
+- Uploaded Qwen/MolmoSpaces source commit: 53aa4f462adb17ce5cf7188b092698242b9497f0
 - VLM/API backend: Qwen/Tongyi Qianwen via environment-provided API key; no API key is hardcoded.
 
 ## Smoke Test
